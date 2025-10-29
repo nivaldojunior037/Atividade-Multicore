@@ -85,7 +85,7 @@ void core1_entry() {
         if(id_sensor == ID_BH1750){
             uint32_t valor_lux = multicore_fifo_pop_blocking();
             // Comunicação de recebimento no terminal
-            printf("Leitura recebida do núcleo 0 \n\nSensor BH1750 \nLeitura: %d\n\n\n", valor_lux);
+            printf("Leitura recebida no núcleo 1. \n\nSensor BH1750 \nLeitura: %d lux\n\n\n\n", valor_lux);
         } 
         
         // Caso seja o AHT20, são lidos os valores de temperatura e umidade e convertidos para float 
@@ -97,7 +97,7 @@ void core1_entry() {
             temp_convert.u = temperatura; 
             umid_convert.u = umidade;
             // Comunicação de recebimento no terminal
-            printf("Leitura recebida do núcleo 0. \n\n Sensor AHT20 \nLeitura: %.2f ºC, %.2f %\n\n\n", temp_convert.f, umid_convert.f);
+            printf("Leitura recebida no núcleo 1. \n\nSensor AHT20 \nLeitura: %.2f °C | %.2f %%\n\n\n\n", temp_convert.f, umid_convert.f);
         } else {
             printf("Identificação de sensor inválida. \n");
         }
@@ -116,6 +116,7 @@ int main() {
     {
         // O BH1750 realiza a leitura e manda, em ordem, seu identificador e o valor lido de lux; 
         uint16_t lux = bh1750_read_measurement(I2C_PORT);
+        printf("Leitura enviada do núcleo 0 \n\nSensor BH1750 \n\nLeitura: %d lux\n\n\n\n", lux);
         multicore_fifo_push_blocking(ID_BH1750);
         multicore_fifo_push_blocking(lux);
         sleep_ms(500);
@@ -124,6 +125,7 @@ int main() {
         aht20_read(I2C_PORT, &data);
         temp_convert.f = data.temperature;
         umid_convert.f = data.humidity;
+        printf("Leitura enviada do núcleo 0 \n\nSensor AHT20 \n\nLeitura: %.2f °C | %.2f %%\n\n\n\n", data.temperature, data.humidity);
         multicore_fifo_push_blocking(ID_AHT20); 
         multicore_fifo_push_blocking(temp_convert.u); 
         multicore_fifo_push_blocking(umid_convert.u); 
