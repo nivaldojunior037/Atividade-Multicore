@@ -73,59 +73,94 @@ void setup() {
     bh1750_power_on(I2C_PORT);
 }
 
-// Função de ativação do núcleo 1 do RP2040
-void core1_entry() {
-    while (true)
-    {
-        // Organização para enviar os dados dos sensores sem colidir dados:
-        // O primeiro valor da FIFO será um identificador que determina qual sensor realizou a última leitura
-        uint32_t id_sensor = multicore_fifo_pop_blocking(); 
+// Função para processar os dados dos sensores no display
+void process_display_data(uint32_t temperatura, uint32_t umidade, uint32_t valor_lux) {
+    char temp_str[20];
+    char umid_str[20];
+    char lux_str[20];
+    bool cor = true;
+    conversor_float_t temp_display, umid_display;
+    temp_display.u = temperatura;
+    umid_display.u = umidade;
 
-        // Caso seja o BH1750, é lido apenas o valor de lux enviado pelo core 0
-        if(id_sensor == ID_BH1750){
-            uint32_t valor_lux = multicore_fifo_pop_blocking();
-            // Comunicação de recebimento no terminal
-            printf("Leitura recebida no núcleo 1. \n\nSensor BH1750 \nLeitura: %d lux\n\n\n\n", valor_lux);
-        } 
-        
-        // Caso seja o AHT20, são lidos os valores de temperatura e umidade e convertidos para float 
-        else if (id_sensor == ID_AHT20){
-            uint32_t temperatura = multicore_fifo_pop_blocking();
-            uint32_t umidade = multicore_fifo_pop_blocking();
+    ssd1306_fill(&ssd, false);
+    ssd1306_rect(&ssd, 5, 5, 123, 59, cor, false);
+    ssd1306_line(&ssd, 5, 20, 123, 20, cor);
+    ssd1306_line(&ssd, 5, 40, 123, 40, cor);
+    ssd1306_line(&ssd, 64, 5, 64, 40, cor);
+    
+    ssd1306_draw_string(&ssd, "Temp.", 10, 8);
+    ssd1306_draw_string(&ssd, "Umid.", 67, 8);
+    
+    sprintf(temp_str, "%.1f", temp_display.f);
+    sprintf(umid_str, "%.1f", umid_display.f);
+    sprintf(lux_str, "%d", valor_lux);
+    ssd1306_draw_string(&ssd, temp_str, 10, 31);
+    ssd1306_draw_string(&ssd, umid_str, 67, 31);
+    ssd1306_draw_string(&ssd, "Lux:", 10, 50);
+    ssd1306_draw_string(&ssd, lux_str, 40, 50);
+    ssd1306_send_data(&ssd);
 
-            conversor_float_t temp_convert, umid_convert;
-            temp_convert.u = temperatura; 
-            umid_convert.u = umidade;
-            // Comunicação de recebimento no terminal
-            printf("Leitura recebida no núcleo 1. \n\nSensor AHT20 \nLeitura: %.2f °C | %.2f %%\n\n\n\n", temp_convert.f, umid_convert.f);
-        } else {
-            printf("Identificação de sensor inválida. \n");
-        }
+    // Atualiza os LEDs baseado na temperatura convertida
+    if(temp_display.f > 45.0) {
+        gpio_put(RED_PIN, 1);
+        gpio_put(GREEN_PIN, 0);
+        gpio_put(BLUE_PIN, 0);
+    }
+    else if(temp_display.f < 20.0) {
+        gpio_put(GREEN_PIN, 0);
+        gpio_put(RED_PIN, 1);
+        gpio_put(BLUE_PIN, 1);
+    }
+    else {
+        gpio_put(BLUE_PIN, 0);
+        gpio_put(RED_PIN, 0);
+        gpio_put(GREEN_PIN, 1);
     }
 }
 
+// Função de ativação do núcleo 1 do RP2040
+void core1_entry() {
+    uint32_t temperatura = 0;
+    uint32_t umidade = 0;
+    uint32_t valor_lux = 0;
+
+    while (true) {
+        // Core 1 lê o sensor BH1750
+        uint16_t lux = bh1750_read_measurement(I2C_PORT);
+        valor_lux = lux;
+        printf("Leitura do BH1750 (core 1): %d lux\n", lux);
+        
+        // Verifica se há dados do sensor de temperatura disponíveis
+        if (multicore_fifo_rvalid()) {
+            uint32_t id_sensor = multicore_fifo_pop_blocking();
+            if (id_sensor == ID_AHT20) {
+                temperatura = multicore_fifo_pop_blocking();
+                umidade = multicore_fifo_pop_blocking();
+                printf("Dados do AHT20 recebidos\n");
+            }
+        }
+
+        // Atualiza o display e os LEDs com os dados mais recentes
+        process_display_data(temperatura, umidade, valor_lux);
+        
+        sleep_ms(500);
+    }
+}
 
 int main() {
-
     setup();
     // Inicialização do core 1 do RP2040
     multicore_launch_core1(core1_entry);
+    
     conversor_float_t temp_convert, umid_convert;
 
-    while (true)
-    {
-        // O BH1750 realiza a leitura e manda, em ordem, seu identificador e o valor lido de lux; 
-        uint16_t lux = bh1750_read_measurement(I2C_PORT);
-        printf("Leitura enviada do núcleo 0 \n\nSensor BH1750 \n\nLeitura: %d lux\n\n\n\n", lux);
-        multicore_fifo_push_blocking(ID_BH1750);
-        multicore_fifo_push_blocking(lux);
-        sleep_ms(500);
-
-        // Em seguida, o AHT20 realiza a leitura e manda, também em ordem, seu identificador, a medição de temperatura e de umidade; 
+    while (true) {
+        // O core0 lê o sensor AHT20
         aht20_read(I2C_PORT, &data);
         temp_convert.f = data.temperature;
         umid_convert.f = data.humidity;
-        printf("Leitura enviada do núcleo 0 \n\nSensor AHT20 \n\nLeitura: %.2f °C | %.2f %%\n\n\n\n", data.temperature, data.humidity);
+        printf("Leitura do AHT20 (core 0): %.2f °C | %.2f %%\n", data.temperature, data.humidity);
         multicore_fifo_push_blocking(ID_AHT20); 
         multicore_fifo_push_blocking(temp_convert.u); 
         multicore_fifo_push_blocking(umid_convert.u); 
